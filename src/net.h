@@ -30,6 +30,10 @@
 #include <boost/foreach.hpp>
 #include <boost/signals2/signal.hpp>
 
+// Enable OpenSSL Support for Zen
+#include <openssl/bio.h>
+#include <openssl/ssl.h>
+
 class CAddrMan;
 class CBlockIndex;
 class CScheduler;
@@ -237,6 +241,8 @@ public:
 class CNode
 {
 public:
+    // OpenSSL
+    BIO *BIO_node;
     // socket
     uint64_t nServices;
     SOCKET hSocket;
@@ -328,7 +334,8 @@ public:
     // Whether a ping is requested.
     bool fPingQueued;
 
-    CNode(SOCKET hSocketIn, CAddress addrIn, std::string addrNameIn = "", bool fInboundIn=false);
+    //CNode(SOCKET hSocketIn, CAddress addrIn, std::string addrNameIn = "", bool fInboundIn=false);
+    CNode(SOCKET hSocketIn, BIO *node_BIO, CAddress addrIn, std::string addrNameIn = "", bool fInboundIn=false);
     ~CNode();
 
 private:

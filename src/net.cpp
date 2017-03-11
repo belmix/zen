@@ -34,9 +34,13 @@
 #include <boost/thread.hpp>
 
 // Used for E2E Encryption in Zen
+#include <openssl/x509.h>
+#include <openssl/x509_vfy.h>
+#include <openssl/ossl_typ.h>
 #include <openssl/conf.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <openssl/pem.h>
 #include <stdio.h> // debugging
 
 // Dump addresses to peers.dat every 15 minutes (900s)
@@ -157,46 +161,57 @@ void configure_context(SSL_CTX *ctx)
 
 bool establish_tls_connection(SOCKET& hSocketRet, BIO *BIO_node)
 {
-    long res = 1;
+    int res = 1;
 
     SSL_CTX* ctx = NULL;
     SSL *ssl = NULL;
+    BIO *rwbio = NULL;
 
     init_openssl_library();
 
-    const SSL_METHOD* method = TLS_method();
+    const SSL_METHOD* method = TLS_client_method();
 
     ctx = SSL_CTX_new(method);
-    ssl = SSL_new(ctx);
 
-    // TODO: Add handshake verification
-    //SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, verify_callback);
-    //SSL_CTX_set_verify_depth(ctx, 4);
+    // Verify handshake
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL); // FIXME/SECURITY: Check certificates
+    SSL_CTX_set_verify_depth(ctx, 4);
 
+    // Force TLSv1.2
     const long flags = SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_TLSv1 | SSL_OP_NO_TLSv1_1 | SSL_OP_NO_COMPRESSION;
     SSL_CTX_set_options(ctx, flags);
 
-    //res = SSL_CTX_load_verify_locations(ctx, "random-org-chain.pem", NULL); // FIXME
-    //if(!(1 == res)) handleFailure();
-
     BIO_node = BIO_new_socket(hSocketRet, BIO_NOCLOSE);
+    BIO_set_nbio(BIO_node, 1);
+    ssl = SSL_new(ctx);
     SSL_set_bio(ssl, BIO_node, BIO_node);
+    rwbio = BIO_new_ssl_connect(ctx);
+    BIO_set_ssl(rwbio, ssl, BIO_NOCLOSE);
 
     const char* const PREFERRED_CIPHERS = "HIGH:!aNULL:!kRSA:!PSK:!SRP:!MD5:!RC4";
     SSL_set_cipher_list(ssl, PREFERRED_CIPHERS);
-    SSL_connect(ssl);
-    const char reply[] = "test!";
-    SSL_write(ssl, reply, strlen(reply));
 
-    /*
-    X509* cert = SSL_get_peer_certificate(ssl);
-    if(cert) { X509_free(cert); }
-    if(NULL == cert) handleFailure();
+    ERR_print_errors_fp(stderr);
 
-    res = SSL_get_verify_result(ssl);
-    if(!(X509_V_OK == res)) handleFailure();
+    while(1) {
+        size_t conn_status = SSL_connect(ssl);
+        size_t error = SSL_get_error(ssl, conn_status);
 
-    */
+        if (error == SSL_ERROR_WANT_READ | error == SSL_ERROR_WANT_WRITE) {
+            ERR_print_errors_fp(stderr);
+            sleep(1);
+            std::cout << "Retrying connection";
+        }
+        else if (error == SSL_ERROR_NONE) {
+            std::cout << "Successful handshake";
+            break;
+        }
+        else {
+            perror("Failed to establish TLS handshake with remote client");
+            ERR_print_errors_fp(stderr);
+            return false;
+        }
+    }
 
     return true;
 }
@@ -484,6 +499,7 @@ CNode* ConnectNode(CAddress addrConnect, const char *pszDest)
 
         // Establish OpenSSL BIO
         BIO *BIO_node;
+        std::cout << "attempting to establish connection";
         establish_tls_connection(hSocket, BIO_node);
 
         // Add node
@@ -736,7 +752,8 @@ void SocketSendData(CNode *pnode)
         const CSerializeData &data = *it;
         assert(data.size() > pnode->nSendOffset);
         //int nBytes = send(pnode->hSocket, &data[pnode->nSendOffset], data.size() - pnode->nSendOffset, MSG_NOSIGNAL | MSG_DONTWAIT);
-        int nBytes = BIO_write(pnode->BIO_node, &data[pnode->nSendOffset], data.size() - pnode->nSendOffset);
+        //int nBytes = BIO_write(pnode->BIO_node, &data[pnode->nSendOffset], data.size() - pnode->nSendOffset);
+        int nBytes = 1;
         if (nBytes > 0) {
             pnode->nLastSend = GetTime();
             pnode->nSendBytes += nBytes;
